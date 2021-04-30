@@ -83,12 +83,16 @@ if __name__ == '__main__':
     x_val =  data_train.label
     y_train = data_test.claim
     y_val =  data_test.label
+    #Qprint(x_train.shape,x_train[0].shape, 'X_train')
+    #print(y_train.shape, 'y_train')
 
     # Train and save the model
     #SAVED_MODEL_FILENAME = platform + 'Defend.h5'
 
     #h = Defend(platform)
     h = Defend()
+    #print(h.summary)
+    #assert 6==5
     h.train(x_train, y_train, x_val, y_val,
             batch_size=20,
             epochs=30,
@@ -99,4 +103,4 @@ if __name__ == '__main__':
     h.load_weights(saved_model_dir = SAVED_MODEL_DIR, saved_model_filename = SAVED_MODEL_FILENAME)
 
     # Get the attention weights for sentences in the news contents as well as comments
-    activation_maps = h.activation_maps(x_val)
+    #activation_maps = h.activation_maps(x_val)

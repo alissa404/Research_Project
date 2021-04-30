@@ -24,6 +24,11 @@ from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_sc
 TOKENIZER_STATE_PATH = 'saved_models/tokenizer.p'
 GLOVE_EMBEDDING_PATH = 'saved_models/glove.6B.100d.txt'
 
+# content -> text input (only need it)
+# comment -> comment input (we don't need it)
+# sentence -> text+comment 
+
+
 class Metrics(Callback):
     def __init__(self):
         #self.log_file = open('./Log_Defend_' + platform + '.txt', 'a')
@@ -83,7 +88,7 @@ class LLayer(Layer):
 
         self.whs = K.variable(self.init((1, self.k)))
         self.whc = K.variable(self.init((1, self.k)))
-        self.trainable_weights = [self.Wl, self.Wc, self.Ws, self.whs, self.whc]
+        self.trainable_weights_ = [self.Wl, self.Wc, self.Ws, self.whs, self.whc]
 
     def compute_mask(self, inputs, mask=None):
         return mask
@@ -127,7 +132,7 @@ class AttLayer(Layer):
         self.W = K.variable(self.init((input_shape[-1], self.attention_dim)))
         self.b = K.variable(self.init((self.attention_dim,)))
         self.u = K.variable(self.init((self.attention_dim, 1)))
-        self.trainable_weights = [self.W, self.b, self.u]
+        self.trainable_weights_ = [self.W, self.b, self.u]
         super(AttLayer, self).build(input_shape)
 
     def compute_mask(self, inputs, mask=None):
@@ -165,7 +170,6 @@ class Defend():
         self.MAX_COMS_LENGTH = 120
         self.VOCABULARY_SIZE = 0
         self.word_embedding = None
-        self.model = None
         self.word_attention_model = None
         #self.sentence_comment_co_model = None
         self.tokenizer = None
@@ -175,7 +179,7 @@ class Defend():
         # Variables for calculating attention weights
         self.news_content_word_level_encoder = None
         #self.comment_word_level_encoder = None
-        self.news_content_sentence_level_encoder = None
+        #self.news_content_sentence_level_encoder = None
         #self.comment_sequence_encoder = None
         #self.co_attention_model = None
 
@@ -193,6 +197,7 @@ class Defend():
             embeddings_index[word] = coefs
         f.close()
         word_index = self.tokenizer.word_index
+
         embedding_matrix = np.random.random((len(word_index) + 1, embedding_dim))
         for word, i in word_index.items():
             embedding_vector = embeddings_index.get(word)
@@ -213,6 +218,8 @@ class Defend():
                                         trainable=True,
                                         mask_zero=True)
         '''
+        '''
+        #sentence = content(text) + comment
         sentence_input = Input(shape=(self.MAX_SENTENCE_LENGTH,), dtype='int32')
         embedded_sequences = embedding_layer(sentence_input)
         l_lstm = Bidirectional(GRU(100, return_sequences=True), name='word_lstm')(embedded_sequences)
@@ -221,58 +228,39 @@ class Defend():
         # plot_model(sentEncoder, to_file='SentenceEncoder.png', show_shapes=True)
 
         self.news_content_word_level_encoder = sentEncoder
+        '''
 
+        # text_input encoder
         content_input = Input(shape=(self.MAX_SENTENCE_COUNT, self.MAX_SENTENCE_LENGTH), dtype='int32')
-        content_encoder = TimeDistributed(sentEncoder)(content_input)
+        #content_encoder = TimeDistributed(sentEncoder)(content_input)
+        content_encoder = TimeDistributed(content_input)
         l_lstm_sent = Bidirectional(GRU(100, return_sequences=True), name='sentence_lstm')(content_encoder)
 
-        self.news_content_sentence_level_encoder = Model(content_input, l_lstm_sent)
-        '''
-        # learn comments representations
-        comment_input = Input(shape=(self.MAX_COMS_LENGTH,), dtype='int32')
-        com_embedded_sequences = com_embedding_layer(comment_input)
-        c_lstm = Bidirectional(GRU(100, return_sequences=True), name='comment_lstm')(com_embedded_sequences)
-        c_att = AttLayer(name='comment_word_attention')(c_lstm)
-        comEncoder = Model(comment_input, c_att, name='comment_word_level_encoder')
-        # plot_model(comEncoder, to_file='CommentEncoder.png', show_shapes=True)
-
-        self.comment_word_level_encoder = comEncoder
-        comEncoder.summary()
-
-        all_comment_input = Input(shape=(self.MAX_COMS_COUNT, self.MAX_COMS_LENGTH), dtype='int32')
-        all_comment_encoder = TimeDistributed(comEncoder, name='comment_sequence_encoder')(all_comment_input)
-
-        self.comment_sequence_encoder = Model(all_comment_input, all_comment_encoder)
+        #self.news_content_sentence_level_encoder = Model(content_input, l_lstm_sent)
+        self.news_content_word_level_encoder = Model(content_input, l_lstm_sent)
 
         # Co-attention
-
-        L = LLayer(name="co-attention")([all_comment_encoder, l_lstm_sent])
-        L_Model = Model([all_comment_input, content_input], L)
+        L = LLayer(name="co-attention")([l_lstm_sent])
+        L_Model = Model([content_input], L)
 
         self.co_attention_model = L_Model
 
-        # plot_model(L_Model, to_file='l_representation.png', show_shapes=True)
-
-        preds = Dense(2, activation='softmax')(L)
-        model = Model(inputs=[all_comment_input, content_input], outputs=preds)
-        '''
+        preds = Dense(n_classes, activation='softmax')(L)
+        model = Model(inputs=[content_input], outputs=preds)
         model.summary()
-        # plot_model(model, to_file='CHATT.png', show_shapes=True)
 
         optimize = RMSprop(lr=0.001)
-        model.compile(loss='binary_crossentropy',
-                      optimizer=optimize)
+        model.compile(loss='binary_crossentropy', optimizer=optimize)
         return model
 
     def load_weights(self, saved_model_dir, saved_model_filename):
-        #with CustomObjectScope({'AttLayer': AttLayer, 'LLayer': LLayer}):
-        with CustomObjectScope({'AttLayer': AttLayer}):
+        with CustomObjectScope({'AttLayer': AttLayer, 'LLayer': LLayer}):
             self.model = load_model(str(os.path.join(saved_model_dir, saved_model_filename)))
             self.news_sequence_encoder = self.model.get_layer('time_distributed_1')
             #self.comment_sequence_encoder = self.model.get_layer('comment_sequence_encoder')
             #self.co_attention_model = self.model.get_layer('co-attention')
-            tokenizer_path = os.path.join(
-                saved_model_dir, self._get_tokenizer_filename(saved_model_filename))
+            tokenizer_path = os.path.join(saved_model_dir, self._get_tokenizer_filename(saved_model_filename))
+
             dill._dill._reverse_typemap['ObjectType'] = object
             tokenizer_state = pickle.load(open(tokenizer_path, "rb"))
             self.tokenizer = tokenizer_state['tokenizer']
@@ -284,7 +272,7 @@ class Defend():
     def _get_tokenizer_filename(self, saved_model_filename):
         return saved_model_filename + '.tokenizer'
 
-    
+    '''
     def _fit_on_texts_and_comments(self, train_x, val_x):
         """
         Creates vocabulary set from the news content and the comments
@@ -299,7 +287,7 @@ class Defend():
         all_text = []
 
         all_sentences = []
-        '''
+        
         for text in texts:
             for sentence in text:
                 all_sentences.append(sentence)
@@ -310,21 +298,17 @@ class Defend():
                 all_comments.append(sentence)
 
         all_text.extend(all_comments)
-        '''
         all_text.extend(all_sentences)
+        
         self.tokenizer.fit_on_texts(all_text)
         self.VOCABULARY_SIZE = len(self.tokenizer.word_index) + 1
         self._create_reverse_word_index()
-    
+    '''
     def _create_reverse_word_index(self):
         self.reverse_word_index = {value: key for key, value in self.tokenizer.word_index.items()}
 
     def _encode_texts(self, texts):
-        """
-        Pre process the news content sentences to equal length for feeding to GRU
-        :param texts:
-        :return:
-        """
+   
         encoded_texts = np.zeros((len(texts), self.MAX_SENTENCE_COUNT, self.MAX_SENTENCE_LENGTH), dtype='int32')
         for i, text in enumerate(texts):
             encoded_text = np.array(pad_sequences(
@@ -364,18 +348,20 @@ class Defend():
               saved_model_dir='saved_models', saved_model_filename=None, ):
 
         # Fit the vocabulary set on the content and comments
-        self._fit_on_texts_and_comments(train_x, val_x)
+        #self._fit_on_texts_and_comments(train_x, val_x)
+
         self.model = self._build_model(
             n_classes=train_y.shape[-1],
             embedding_dim=100,
             embeddings_path=embeddings_path)
+        print('model_builed!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
         # Create encoded input for content and comments
         encoded_train_x = self._encode_texts(train_x)
         encoded_val_x = self._encode_texts(val_x)
-        
         #encoded_train_c = self._encode_comments(train_c)
         #encoded_val_c = self._encode_comments(val_c)
+        
         callbacks = [
             LambdaCallback(
                 on_epoch_end=lambda epoch, logs: self._save_tokenizer_on_epoch_end(
@@ -393,8 +379,8 @@ class Defend():
                 )
             )
         callbacks.append(self.metrics)
-        self.model.fit([encoded_train_c, encoded_train_x], y=train_y,
-                       validation_data=([encoded_val_c, encoded_val_x], val_y),
+        self.model.fit([encoded_train_x], y=train_y,
+                       validation_data=([encoded_val_x], val_y),
                        batch_size=batch_size,
                        epochs=epochs,
                        verbose=1,
@@ -403,9 +389,9 @@ class Defend():
     def predict(self, x, c):
         encoded_x = self._encode_texts(x)
         #encoded_c = self._encode_comments(c)
-        return self.model.predict([encoded_c, encoded_x])
+        return self.model.predict(encoded_x)
 
-    def process_atten_weight(self, encoded_text, content_word_level_attentions, sentence_co_attention):
+    def process_atten_weight(self, encoded_text, content_word_level_attentions):
         no_pad_text_att = []
         for k in range(len(encoded_text)):
             tmp_no_pad_text_att = []
@@ -422,8 +408,8 @@ class Defend():
                     wd = self.reverse_word_index[wd_idx]
                     no_pad_sen_att.append((wd, content_word_level_attentions[k][i][j]))
 
-                tmp_no_pad_text_att.append((no_pad_sen_att, sentence_co_attention[k][i]))
-
+                #tmp_no_pad_text_att.append((no_pad_sen_att, sentence_co_attention[k][i])) # we don't need   sentence_co_attention 
+                tmp_no_pad_text_att.append(no_pad_sen_att)
             no_pad_text_att.append(tmp_no_pad_text_att)
 
         # Normalize without padding tokens
@@ -465,13 +451,16 @@ class Defend():
 
         return no_pad_text_att
 
+    '''
     def activation_maps(self, news_article_sentence_list, websafe=False):
+
         """
         :param news_article_sentence_list: List of sequence of sentences for each sample
         :param news_article_comment_list: List of sequences
         :param websafe: parameter to indicate if the interface is used in multithreaded web environment
         :return: Return attention weights of the sentences and comments for the samples passed
         """
+        
         encoded_text = self._encode_texts(news_article_sentence_list)
         #encoded_comment = self._encode_comments(news_article_comment_list)
         content_word_level_attentions = []
@@ -490,7 +479,7 @@ class Defend():
             # ait = np.exp(ait)
             content_word_wattention = (np.exp(ait) / np.sum(np.exp(ait), axis=1)[:, np.newaxis])
             content_word_level_attentions.append(content_word_wattention)
-        '''
+        
         # Get the word level attention for comments
         comment_word_level_attentions = []
         comment_word_encoder = Model(inputs=self.comment_sequence_encoder.layer.input,
@@ -506,12 +495,13 @@ class Defend():
             comment_word_level_attention = (np.exp(ait) / np.sum(np.exp(ait), axis=1)[:, np.newaxis])
             comment_word_level_attentions.append(comment_word_level_attention)
 
-
-        # Get the co attention between document sentences and comments
-        comment_level_encoder = Model(inputs=self.comment_sequence_encoder.input,
-                                      outputs=self.comment_sequence_encoder.output)
-        comment_level_weights = comment_level_encoder.predict(encoded_comment)
-        '''
+        
+        # # Get the co attention between document sentences and comments
+        # comment_level_encoder = Model(inputs=self.comment_sequence_encoder.input,
+        #                               outputs=self.comment_sequence_encoder.output)
+        # comment_level_weights = comment_level_encoder.predict(encoded_comment)
+        
+        
         sentence_level_encoder = Model(inputs=self.news_sequence_encoder.input,
                                        outputs=self.news_sequence_encoder.output)
 
@@ -526,27 +516,28 @@ class Defend():
         sentence_rep_trans = np.transpose(sentence_rep, axes=(0, 2, 1))
         #comment_rep_trans = np.transpose(comment_rep, axes=(0, 2, 1))
 
-        L = np.tanh(np.einsum('btd,dD,bDn->btn', comment_rep, Wl, sentence_rep_trans))
+        L = np.tanh(np.einsum('btd,dD,bDn->btn', Wl, sentence_rep_trans))
         L_trans = np.transpose(L, axes=(0, 2, 1))
 
-        Hs = np.tanh(np.einsum('kd,bdn->bkn', Ws, sentence_rep_trans) + np.einsum('kd,bdt,btn->bkn', Wc,
-                                                                                  comment_rep_trans, L))
-        Hc = np.tanh(np.einsum('kd,bdt->bkt', Wc, comment_rep_trans) + np.einsum('kd,bdn,bnt->bkt', Ws,
+        Hs = np.tanh(np.einsum('kd,bdn->bkn', Ws, sentence_rep_trans) + np.einsum('kd,bdt,btn->bkn', Wc, L))
+        Hc = np.tanh(np.einsum('kd,bdt->bkt', Wc) + np.einsum('kd,bdn,bnt->bkt', Ws,
                                                                                  sentence_rep_trans, L_trans))
         sent_unnorm_attn = np.einsum('yk,bkn->bn', whs, Hs)
         #comment_unnorm_attn = np.einsum('yk,bkt->bt', whc, Hc)
-        sentence_co_attention = (np.exp(sent_unnorm_attn) / np.sum(np.exp(sent_unnorm_attn), axis=1)[:, np.newaxis])
+        #sentence_co_attention = (np.exp(sent_unnorm_attn) / np.sum(np.exp(sent_unnorm_attn), axis=1)[:, np.newaxis])
         #comment_co_attention = (
         #        np.exp(comment_unnorm_attn) / np.sum(np.exp(comment_unnorm_attn), axis=1)[:, np.newaxis])
+
         if websafe:
-            sentence_co_attention = sentence_co_attention.astype(float)
+            #sentence_co_attention = sentence_co_attention.astype(float)
             #comment_co_attention = comment_co_attention.astype(float)
             #comment_word_level_attentions = np.array(comment_word_level_attentions).astype(float)
             content_word_level_attentions = np.array(content_word_level_attentions).astype(float)
 
-        # res_content = self.process_atten_weight(encoded_text,content_word_level_attentions,sentence_co_attention)
+        res_content = self.process_atten_weight(encoded_text,content_word_level_attentions)
         # res_comment = self.process_atten_weight(encoded_comment,comment_word_level_attentions,comment_co_attention)
         #res_comment_weight = self.process_atten_weight_com(encoded_comment, comment_co_attention)
-        res_sentence_weight = self.process_atten_weight_com(encoded_text, sentence_co_attention)
+        res_sentence_weight = self.process_atten_weight_com(encoded_text)
 
         return res_sentence_weight
+'''
