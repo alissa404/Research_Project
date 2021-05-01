@@ -5,6 +5,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import tensorflow as tf
+import multiprocessing
 import csv
 import torch
 import sys
@@ -76,36 +77,46 @@ def stopwords(df):
         stop_words_dict[line] = 1
     return df
 
-'''
-# padding 
-def padding(df):
-    for idx in range(0, df.shape[0]):
-    sys.stdout.write('\r'+ "Implementing BERT vectoring {}% \n".format(round(100 * idx/df.shape[0], 2)))
-    title_list = []
-    for word in df[target_feature].iloc[idx]:
-            vec = bv.encode([word])
-            title_list.append(vec)
-            df[target_feature + "_vector"].iloc[idx] = title_list
-    return df
-'''
 
 # POS to Index       
-def pos2idx():
-    pos_index = {}
-    idx = 1
-    for index, rows in df_train.POS.iterrows() :
-        for pos in rows['POS'] :
-            if pos not in pos_index :
-                pos_index[pos] = idx
-                idx += 1
-                    
-    for index, rows in df_test.POS.iterrows() :
-        for pos in rows['POS'] :
-            if pos not in pos_index :
-                pos_index[pos] = idx
-                idx += 1
+def head_syn2index(head_syn) :
+    pos_list = []
+    for pos in head_syn :
+        pos_list.append(pos_index[pos])
+    return pos_list
+
+def _apply_df(args):
+    df, func, kwargs = args
+    if 'axis' in kwargs:
+        axis = kwargs.pop('axis')
+        return df.apply(func, **kwargs, axis=axis)
+    return df.apply(func, **kwargs)
+
+def apply_by_multiprocessing(df, func, **kwargs):
+    workers = kwargs.pop('workers')
+    if workers == -1:
+        workers = multiprocessing.cpu_count() 
+    coln = 1    
+    if 'coln' in kwargs:
+        coln = kwargs.pop('coln')
+    pool = multiprocessing.Pool(processes=workers)
+    result = pool.map(_apply_df, [(d, func, kwargs) for d in np.array_split(df, workers)])
+    pool.close()
+    series = pd.concat(list(result))
+
+    ## TODO: make here beautiful
+    if coln == 1:
+        return series
+    elif coln == 2:
+        series_0, series_1 = series.apply(lambda x: x[0]), series.apply(lambda x: x[1])
+        return series_0, series_1
+    elif coln == 3:
+        series_0, series_1, series_2 = series.apply(lambda x: x[0]), series.apply(lambda x: x[1]), series.apply(lambda x: x[2])
+        return series_0, series_1, series_2    
+    
 
 
+# PositionEmbedding
 class TokenAndPositionEmbedding(Layer):
     def __init__(self, maxlen, vocab_size, embed_dim):
         super(TokenAndPositionEmbedding, self).__init__()
@@ -319,6 +330,27 @@ if __name__ == '__main__':
     # load data
     df_train = cat_replace(pd.read_csv('train_done.csv')).drop_duplicates(subset=['claim']).dropna()
     df_test  = cat_replace(pd.read_csv('test_done.csv')).drop_duplicates(subset=['claim']).dropna()
+
+    #pos 2index
+    pos_index = {}
+    idx = 1
+    for index, rows in df_train.iterrows() :
+        for pos in rows['POS'] :
+            if pos not in pos_index :
+                pos_index[pos] = idx
+                idx += 1
+
+    for index, rows in df_test.iterrows() :
+        for pos in rows['POS'] :
+            if pos not in pos_index :
+                pos_index[pos] = idx
+                idx += 1
+            
+    df_train['head_pos_index'] = apply_by_multiprocessing(df_train['POS'], head_syn2index, workers = -1)
+    df_test['head_pos_index'] = apply_by_multiprocessing(df_test['POS'], head_syn2index, workers = -1)
+
+
+
 
 
 
